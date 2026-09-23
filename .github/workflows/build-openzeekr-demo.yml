@@ -71,36 +71,18 @@ jobs:
           set -euxo pipefail
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           echo "sdk.dir=$SDK" > local.properties
-          echo "SDK=$SDK"
-          ls -la "$SDK" || true
-          ls -la "$SDK/platforms" || true
-          ls -la "$SDK/ndk" || true
-          ls -la "$SDK/cmake" || true
+          test -d "$SDK/platforms/android-34"
+          test -d "$SDK/ndk/27.3.13750724"
+          test -d "$SDK/cmake/3.31.5"
 
-          PLATFORM="$(find "$SDK/platforms" -maxdepth 1 -type d -name 'android-*' -printf '%f\n' 2>/dev/null | sed 's/android-//' | sort -n | tail -1)"
-          NDK_VER="$(find "$SDK/ndk" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
-          CMAKE_VER="$(find "$SDK/cmake" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
-
-          test -n "$PLATFORM"
-          test -n "$NDK_VER"
-          test -n "$CMAKE_VER"
-
-          echo "Using platform android-$PLATFORM, NDK $NDK_VER, CMake $CMAKE_VER"
-
-          python3 - "$PLATFORM" "$NDK_VER" "$CMAKE_VER" <<'PY'
-          import re, sys
+          python3 - <<'PY'
+          import re
           from pathlib import Path
-          platform, ndk, cmake = sys.argv[1:4]
-          for rel in ["app/build.gradle.kts", "core/build.gradle.kts", "wear/build.gradle.kts"]:
-              p=Path(rel)
-              if not p.exists():
-                  continue
-              s=p.read_text()
-              s=re.sub(r'compileSdk\s*=\s*\d+', f'compileSdk = {platform}', s)
-              if rel=="core/build.gradle.kts":
-                  s=re.sub(r'ndkVersion\s*=\s*"[^"]+"', f'ndkVersion = "{ndk}"', s)
-                  s=re.sub(r'version\s*=\s*"3\.22\.1"', f'version = "{cmake}"', s)
-              p.write_text(s)
+          p = Path("core/build.gradle.kts")
+          s = p.read_text()
+          s = re.sub(r'ndkVersion\s*=\s*"[^"]+"', 'ndkVersion = "27.3.13750724"', s)
+          s = re.sub(r'version\s*=\s*"3\.22\.1"', 'version = "3.31.5"', s)
+          p.write_text(s)
           PY
 
       - name: Build debug APK
