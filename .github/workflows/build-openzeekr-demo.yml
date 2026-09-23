@@ -10,9 +10,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - name: Checkout helper repo
         uses: actions/checkout@v4
@@ -53,10 +50,7 @@ jobs:
                   }
               }"""
           )
-          s = s.replace(
-              "if (!cfg.supportNoteShown) {",
-              "if (!OPENZEEKR_DEMO_MODE && !cfg.supportNoteShown) {"
-          )
+          s = s.replace("if (!cfg.supportNoteShown) {", "if (!OPENZEEKR_DEMO_MODE && !cfg.supportNoteShown) {")
           if "if (!OPENZEEKR_DEMO_MODE && !cfg.onboardingDone)" not in s:
               raise SystemExit("Onboarding patch failed")
           if "OPENZEEKR_DEMO_MODE -> Tab.VEHICLE.ordinal" not in s:
@@ -65,29 +59,60 @@ jobs:
           PY
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Install Android dependencies
+      - name: Use preinstalled Android toolchain
+        working-directory: openzeekr
+        shell: bash
         run: |
-          SDKMANAGER="/usr/local/lib/android/sdk/cmdline-tools/16.0/bin/sdkmanager"
-          if [ ! -x "$SDKMANAGER" ]; then
-            SDKMANAGER="$(command -v sdkmanager)"
-          fi
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platforms;android-34" "build-tools;34.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
+          set -euxo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "sdk.dir=$SDK" > local.properties
+          echo "SDK=$SDK"
+          ls -la "$SDK" || true
+          ls -la "$SDK/platforms" || true
+          ls -la "$SDK/ndk" || true
+          ls -la "$SDK/cmake" || true
+
+          PLATFORM="$(find "$SDK/platforms" -maxdepth 1 -type d -name 'android-*' -printf '%f\n' 2>/dev/null | sed 's/android-//' | sort -n | tail -1)"
+          NDK_VER="$(find "$SDK/ndk" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
+          CMAKE_VER="$(find "$SDK/cmake" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort -V | tail -1)"
+
+          test -n "$PLATFORM"
+          test -n "$NDK_VER"
+          test -n "$CMAKE_VER"
+
+          echo "Using platform android-$PLATFORM, NDK $NDK_VER, CMake $CMAKE_VER"
+
+          python3 - "$PLATFORM" "$NDK_VER" "$CMAKE_VER" <<'PY'
+          import re, sys
+          from pathlib import Path
+          platform, ndk, cmake = sys.argv[1:4]
+          for rel in ["app/build.gradle.kts", "core/build.gradle.kts", "wear/build.gradle.kts"]:
+              p=Path(rel)
+              if not p.exists():
+                  continue
+              s=p.read_text()
+              s=re.sub(r'compileSdk\s*=\s*\d+', f'compileSdk = {platform}', s)
+              if rel=="core/build.gradle.kts":
+                  s=re.sub(r'ndkVersion\s*=\s*"[^"]+"', f'ndkVersion = "{ndk}"', s)
+                  s=re.sub(r'version\s*=\s*"3\.22\.1"', f'version = "{cmake}"', s)
+              p.write_text(s)
+          PY
 
       - name: Build debug APK
         working-directory: openzeekr
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon :app:assembleDebug
+          ./gradlew --no-daemon --stacktrace :app:assembleDebug
 
       - name: Rename APK
         run: |
           cp openzeekr/app/build/outputs/apk/debug/app-debug.apk OpenZeekr-Demo-SkipLogin-v0.1.5.apk
+          sha256sum OpenZeekr-Demo-SkipLogin-v0.1.5.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
