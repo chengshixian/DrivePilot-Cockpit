@@ -1,0 +1,93 @@
+name: Build OpenZeekr Demo APK
+
+on:
+  push:
+    branches:
+      - tmp-openzeekr-demo-build-20260923
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout helper repo
+        uses: actions/checkout@v4
+
+      - name: Checkout OpenZeekr v0.1.5
+        run: |
+          git clone --depth 1 --branch v0.1.5 https://github.com/borconi/openzeekr.git openzeekr
+
+      - name: Patch demo mode to skip onboarding/login
+        working-directory: openzeekr
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("app/src/main/java/com/openzeekr/app/ui/AppRoot.kt")
+          s = p.read_text()
+          marker = "private enum class Tab"
+          if "OPENZEEKR_DEMO_MODE" not in s:
+              s = s.replace(marker, 'private const val OPENZEEKR_DEMO_MODE = true\n\n' + marker, 1)
+          s = s.replace("if (!cfg.onboardingDone) {", "if (!OPENZEEKR_DEMO_MODE && !cfg.onboardingDone) {")
+          s = s.replace(
+              "var tab by remember { mutableIntStateOf(Tab.SETTINGS.ordinal) }",
+              "var tab by remember { mutableIntStateOf(if (OPENZEEKR_DEMO_MODE) Tab.VEHICLE.ordinal else Tab.SETTINGS.ordinal) }"
+          )
+          s = s.replace(
+              """    LaunchedEffect(loggedIn, provisioned) {
+                  tab = when {
+                      !loggedIn -> Tab.SETTINGS.ordinal
+                      !provisioned -> Tab.KEY.ordinal
+                      else -> Tab.VEHICLE.ordinal
+                  }
+              }""",
+              """    LaunchedEffect(loggedIn, provisioned) {
+                  tab = when {
+                      OPENZEEKR_DEMO_MODE -> Tab.VEHICLE.ordinal
+                      !loggedIn -> Tab.SETTINGS.ordinal
+                      !provisioned -> Tab.KEY.ordinal
+                      else -> Tab.VEHICLE.ordinal
+                  }
+              }"""
+          )
+          s = s.replace(
+              "if (!cfg.supportNoteShown) {",
+              "if (!OPENZEEKR_DEMO_MODE && !cfg.supportNoteShown) {"
+          )
+          if "if (!OPENZEEKR_DEMO_MODE && !cfg.onboardingDone)" not in s:
+              raise SystemExit("Onboarding patch failed")
+          if "OPENZEEKR_DEMO_MODE -> Tab.VEHICLE.ordinal" not in s:
+              raise SystemExit("Vehicle tab patch failed")
+          p.write_text(s)
+          PY
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android dependencies
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
+
+      - name: Build debug APK
+        working-directory: openzeekr
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Rename APK
+        run: |
+          cp openzeekr/app/build/outputs/apk/debug/app-debug.apk OpenZeekr-Demo-SkipLogin-v0.1.5.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenZeekr-Demo-SkipLogin-v0.1.5
+          path: OpenZeekr-Demo-SkipLogin-v0.1.5.apk
+          retention-days: 1
